@@ -1,3 +1,3 @@
-module Hello_World/hello.go
+module Dictionnary
 
 go 1.21.5
