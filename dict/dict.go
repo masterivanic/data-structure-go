@@ -2,11 +2,10 @@ package dict
 import (
     "fmt"
 	"os"
-	"log"
 	"sort"
 	"io/ioutil"
 	"encoding/json"
-	"strconv"
+	"net/http"
 )
 
 
@@ -79,11 +78,12 @@ func Init() Dict {
 	return d
 }
 
-func (anyDict *Dict) Add(key, value string) {
+func (anyDict *Dict) Add(key, value string) string {
+	var message string = ""
 	var dataSlice []map[string]string
 	jsonContent, err := ioutil.ReadFile(anyDict.filePath)
 	if err != nil {
-		fmt.Println("Error reading file:", err)
+		message = "Error reading file: " +err.Error()
 	}
 
 	_ = json.Unmarshal(jsonContent, &dataSlice)
@@ -91,14 +91,14 @@ func (anyDict *Dict) Add(key, value string) {
 	my_map := map[string]string{key: value}
 	dataSlice = append(dataSlice, my_map)
 
-	data, err := json.MarshalIndent(dataSlice, "", "  ")
-    if err != nil {
-        log.Fatal(err)
-    }
+	data, _ := json.MarshalIndent(dataSlice, "", "  ")
     err = os.WriteFile(anyDict.filePath, data, 0644)
     if err != nil {
-        log.Fatal(err)
-    }
+        message = err.Error()
+    } else {
+		message = "Add successfully"
+	}
+	return message
 }
 
 func (anyDict *Dict) Get(word string) string {
@@ -118,10 +118,11 @@ func (anyDict *Dict) Get(word string) string {
 	return wordFind
 }
 
-func (anyDict *Dict) Remove(key string){
+func (anyDict *Dict) Remove(key string) string {
 	jsonContent, _ := ioutil.ReadFile(anyDict.filePath)
 	var data []map[string]string
 	isRemove := false
+	var message string = ""
 	_ = json.Unmarshal(jsonContent, &data)
 	for i := len(data) - 1; i >= 0; i-- {
 		if _, ok := data[i][key]; ok {
@@ -134,30 +135,34 @@ func (anyDict *Dict) Remove(key string){
 		updatedData, _ := json.MarshalIndent(data, "", "    ")
 		err := ioutil.WriteFile(anyDict.filePath, updatedData, 0644)
 		if err != nil {
-			log.Fatal(err)
+			message = "Something wrong:" + err.Error() 
 		} else {
-			fmt.Println("remove successfully")
+			message = "Delete successfully" 
 		}
 	} else {
-		fmt.Println("cannot remove " + key + " coz dont exist in json file")
+		message = "Cannot remove " + key + " coz dont exist in json file"
 	}
+	return message
 }
 
-func (anyDict *Dict) List() {
-	var count int = 1
+func (anyDict *Dict) List() []map[string]string {
 	var dataMaps []map[string]string
+	var resultList []map[string]string
 	jsonContent, _ := ioutil.ReadFile(anyDict.filePath)
 	_ = json.Unmarshal(jsonContent, &dataMaps)
 	mapOrder := sortDictByKey(dataMaps)
 	for _, aMap := range mapOrder {
+		resultMap := make(map[string]string)
 		for key, value := range aMap {
-			fmt.Println(strconv.Itoa(count) + ") " + key + " : " + value)
-			count += 1
+			resultMap[key] = value
 		}
+		resultList = append(resultList, resultMap)
 	}
+	return resultList
 }
 
-func (anyDict *Dict) Update(key, newValue string){
+func (anyDict *Dict) Update(key, newValue string) string{
+	var message string = ""
 	var data []map[string]string
 	jsonContent, _ := ioutil.ReadFile(anyDict.filePath)
 	isUpdate := false
@@ -174,14 +179,96 @@ func (anyDict *Dict) Update(key, newValue string){
 		updatedData, _ := json.MarshalIndent(data, "", "    ")
 		err := ioutil.WriteFile(anyDict.filePath, updatedData, 0644)
 		if err != nil {
-			log.Fatal(err)
+			message = err.Error()
 		} else {
-			fmt.Println("update successfully")
+			message = "update successfully"
 		} 
 	} else {
-		fmt.Println("cannot update " + key + " coz dont exist in json file")
+		message = "cannot update " + key + " coz dont exist in json file"
 	}
-	
+	return message
 } 
+
+
+func (anyDict *Dict) GetHandler(writer http.ResponseWriter, req *http.Request) {
+	word := req.URL.Query().Get("word")
+	result := anyDict.Get(word)
+	writer.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(writer).Encode(map[string]string{"result": result})
+}
+
+func (anyDict *Dict) ListHandler(writer http.ResponseWriter, req *http.Request){
+	result := anyDict.List()
+	writer.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(writer).Encode(result)
+}
+
+func (anyDict *Dict) RemoveHandler(writer http.ResponseWriter, req *http.Request){
+	key := req.URL.Query().Get("key")
+	message := anyDict.Remove(key)
+	writer.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(writer).Encode(map[string]string{"result": message})
+}
+
+func (anyDict *Dict) AddHandler(writer http.ResponseWriter, req *http.Request){
+		var requestData map[string]string
+		body, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			http.Error(writer, "Failed to read request body", http.StatusBadRequest)
+			return
+		}
+	
+		err = json.Unmarshal(body, &requestData)
+		if err != nil {
+			http.Error(writer, "Failed to parse JSON", http.StatusBadRequest)
+			return
+		}
+	
+		// Extract key and value from the request data
+		key, keyExists := requestData["key"]
+		value, valueExists := requestData["value"]
+	
+		if !keyExists || !valueExists {
+			http.Error(writer, "Key and value are required", http.StatusBadRequest)
+			return
+		}
+	
+		message := anyDict.Add(key, value)
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusOK)
+		json.NewEncoder(writer).Encode(map[string]string{"message": message})
+}
+
+func (anyDict *Dict) UpdateHanlder(writer http.ResponseWriter, req *http.Request)  {
+	var requestData map[string]string
+
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		http.Error(writer, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	err = json.Unmarshal(body, &requestData)
+	if err != nil {
+		http.Error(writer, "Failed to parse JSON", http.StatusBadRequest)
+		return
+	}
+
+	key, keyExists := requestData["key"]
+	newValue, valueExists := requestData["newValue"]
+
+	if !keyExists || !valueExists {
+		http.Error(writer, "Key and newValue are required", http.StatusBadRequest)
+		return
+	}
+
+	message := anyDict.Update(key, newValue)
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	json.NewEncoder(writer).Encode(map[string]string{"message": message})
+}
+
+
+
 
 
